@@ -83,7 +83,7 @@ export async function callGeminiJson<T = Record<string, unknown>>(
     );
   }
 
-  const preferred = options?.preferredModel || process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const preferred = options?.preferredModel || process.env.GEMINI_MODEL || "gemini-3.8-flash";
   const models = Array.from(
     new Set([preferred, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"])
   );
@@ -104,7 +104,7 @@ export async function callGeminiJson<T = Record<string, unknown>>(
         generationConfig: {
           temperature: options?.temperature ?? 0.3,
           responseMimeType: "application/json",
-        },
+       thinkingConfig: { thinkingBudget: 0 }, },
       }),
     });
 
