@@ -6,10 +6,6 @@ export interface GeminiPart {
   };
 }
 
-/**
- * Safely parses JSON returned by Gemini even when LaTeX commands
- * contain single unescaped backslashes (e.g. \in, \ge, \frac, \mathbb{R}).
- */
 export function safeParseGeminiJson<T = Record<string, unknown>>(raw: string): T {
   let txt = String(raw || "").trim();
   txt = txt.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -69,21 +65,19 @@ export function safeParseGeminiJson<T = Record<string, unknown>>(raw: string): T
   }
 }
 
-/**
- * Calls Gemini REST API with automatic model fallback on 503/429 high-demand errors.
- */
 export async function callGeminiJson<T = Record<string, unknown>>(
   parts: GeminiPart[],
-  options?: { temperature?: number; preferredModel?: string }
+  options?: { temperature?: number; apiKeyOverride?: string; modelOverride?: string }
 ): Promise<{ data: T; usedModel: string }> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = (options?.apiKeyOverride || "").trim() || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "Chưa cấu hình GEMINI_API_KEY trên máy chủ. Vui lòng thêm biến môi trường trong Vercel hoặc .env.local."
+      "Chưa có Gemini API Key. Vui lòng nhập API Key cá nhân hoặc cấu hình GEMINI_API_KEY trên máy chủ."
     );
   }
 
- const models = ["gemini-3.8-flash"];
+  const primary = options?.modelOverride || "gemini-3.8-flash";
+  const models = Array.from(new Set([primary, "gemini-3.8-flash"]));
 
   let lastErr: Error | null = null;
 
@@ -101,7 +95,8 @@ export async function callGeminiJson<T = Record<string, unknown>>(
         generationConfig: {
           temperature: options?.temperature ?? 0.3,
           responseMimeType: "application/json",
-       thinkingConfig: { thinkingBudget: 0 }, },
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
     });
 

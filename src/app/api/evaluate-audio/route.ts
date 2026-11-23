@@ -1,10 +1,48 @@
-import { NextResponse } from "next/server";export const maxDuration = 60;
+export const maxDuration = 60;
+
+import { NextResponse } from "next/server";
 import { callGeminiJson } from "@/lib/gemini";
 import { createServerSupabase } from "@/lib/supabase/server";
 import type { PronunciationResult } from "@/types/mathspeak";
 
 export async function POST(request: Request) {
   try {
+    const supabase = await createServerSupabase();
+    if (!supabase) {
+      return NextResponse.json({ error: "Chưa cấu hình Supabase." }, { status: 503 });
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: "Vui lòng đăng nhập để dùng tính năng AI chấm phát âm." },
+        { status: 401 }
+      );
+    }
+
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("trial_used, trial_limit, personal_api_key")
+      .eq("id", user.id)
+      .single();
+
+    const personalKey = (profile?.personal_api_key || "").trim();
+    const trialUsed = profile?.trial_used ?? 0;
+    const trialLimit = profile?.trial_limit ?? 2;
+    const usingPersonalKey = personalKey.length > 10;
+
+    if (!usingPersonalKey && trialUsed > trialLimit) {
+      return NextResponse.json(
+        {
+          code: "TRIAL_EXHAUSTED",
+          error: "Vui lòng nhập Gemini API Key cá nhân để tiếp tục chấm phát âm không giới hạn.",
+        },
+        { status: 402 }
+      );
+    }
+
     const formData = await request.formData();
     const audio = formData.get("audio");
     const targetText = String(formData.get("targetText") || "").trim();
@@ -56,7 +94,10 @@ Rules:
         { inlineData: { mimeType: cleanMime, data: base64Audio } },
         { text: evalPrompt },
       ],
-      { temperature: 0.2 }
+      {
+        temperature: 0.2,
+        apiKeyOverride: usingPersonalKey ? personalKey : undefined,
+      }
     );
 
     const result: PronunciationResult = {
@@ -73,24 +114,23 @@ Rules:
 
     const isUuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(lessonId);
-    const supabase = await createServerSupabase();
-    if (supabase && lineId) {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from("pronunciation_logs").insert({
-          user_id: user.id,
-          lesson_id: isUuid ? lessonId : null,
-          line_id: lineId,
-          target_text: targetText,
-          heard_text: result.heard_text,
-          score: result.score,
-          verdict: result.verdict,
-          feedback: result,
-        });
-      }
+    if (lineId) {
+      await supabase.from("pronunciation_logs").insert({
+        user_id: user.id,
+        lesson_id: isUuid ? lessonId : null,
+        line_id: lineId,
+        target_text: targetText,
+        heard_text: result.heard_text,
+        score: result.score,
+        verdict: result.verdict,
+        feedback: result,
+      });
     }
+
+    await supabase
+      .from("user_profiles")
+      .update({ last_active_at: new Date().toISOString() })
+      .eq("id", user.id);
 
     return NextResponse.json({ result });
   } catch (err) {

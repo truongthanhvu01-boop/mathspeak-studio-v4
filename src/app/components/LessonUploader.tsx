@@ -1,19 +1,27 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { UploadCloud, Sparkles, PlayCircle } from "lucide-react";
+import { UploadCloud, Sparkles, PlayCircle, KeyRound } from "lucide-react";
 import { SAMPLE_INPUT_12 } from "@/lib/demo-data";
 import type { LessonScript } from "@/types/mathspeak";
 
 interface LessonUploaderProps {
+  hasPersonalKey: boolean;
+  trialUsed: number;
+  trialLimit: number;
   onScriptCreated: (script: LessonScript) => void;
   onOpenDemo: () => void;
+  onNeedApiKey: () => void;
   onNotify: (msg: string) => void;
 }
 
 export function LessonUploader({
+  hasPersonalKey,
+  trialUsed,
+  trialLimit,
   onScriptCreated,
   onOpenDemo,
+  onNeedApiKey,
   onNotify,
 }: LessonUploaderProps) {
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -25,6 +33,8 @@ export function LessonUploader({
     "Hỗ trợ .docx, .txt, .md — trích xuất văn bản trực tiếp trên máy chủ."
   );
   const [loading, setLoading] = useState(false);
+
+  const remaining = Math.max(0, trialLimit - trialUsed);
 
   async function handleFile(file: File) {
     setFileStatus(`Đang trích xuất nội dung từ "${file.name}"...`);
@@ -46,7 +56,12 @@ export function LessonUploader({
 
   async function handleGenerate() {
     if (!lessonText.trim()) {
-      onNotify("Thầy hãy tải file giáo án hoặc dán nội dung KHBD trước nhé.");
+      onNotify("Thầy/Cô hãy tải file giáo án hoặc dán nội dung KHBD trước nhé.");
+      return;
+    }
+    if (!hasPersonalKey && remaining <= 0) {
+      onNeedApiKey();
+      onNotify("Đã hết lượt dùng thử miễn phí. Vui lòng nhập Gemini API Key cá nhân để tiếp tục.");
       return;
     }
     setLoading(true);
@@ -57,9 +72,14 @@ export function LessonUploader({
         body: JSON.stringify({ lessonText, grade, level, style }),
       });
       const data = await resp.json();
+      if (resp.status === 402 || data.code === "TRIAL_EXHAUSTED") {
+        onNeedApiKey();
+        onNotify(data.error || "Đã hết lượt dùng thử, vui lòng nhập API Key cá nhân.");
+        return;
+      }
       if (!resp.ok) throw new Error(data.error || "Không thể tạo kịch bản.");
       onScriptCreated(data.script);
-      onNotify(`Đã tạo kịch bản thành công (${data.usedModel})!`);
+      onNotify(`Đã tạo kịch bản thành công (${data.usedModel}) và lưu vào kho riêng!`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : "Lỗi gọi Gemini AI.");
     } finally {
@@ -75,7 +95,26 @@ export function LessonUploader({
             Tải Kế hoạch bài dạy (KHBD) để AI biên soạn kịch bản Tiếng Anh
           </h2>
           <p className="text-sm text-slate-600">
-            Khóa Gemini API được bảo mật trên máy chủ — giáo viên trong tổ Toán chỉ cần tải giáo án lên là dùng ngay.
+            {hasPersonalKey ? (
+              <span className="text-emerald-700 font-medium">
+                Đang dùng Gemini API Key cá nhân (Không giới hạn lượt).
+              </span>
+            ) : (
+              <span>
+                Lượt dùng thử miễn phí còn lại:{" "}
+                <strong className={remaining > 0 ? "text-indigo-700" : "text-rose-600"}>
+                  {remaining}/{trialLimit} lượt
+                </strong>
+                .{" "}
+                <button
+                  type="button"
+                  onClick={onNeedApiKey}
+                  className="text-indigo-600 hover:underline font-semibold"
+                >
+                  Nhập API Key cá nhân
+                </button>
+              </span>
+            )}
           </p>
         </div>
         <button
@@ -142,7 +181,7 @@ export function LessonUploader({
           value={lessonText}
           onChange={(e) => setLessonText(e.target.value)}
           className="w-full rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 p-3.5 text-sm leading-relaxed outline-none"
-          placeholder="Dán nội dung Kế hoạch bài dạy Toán THPT vào đây..."
+          placeholder="Dán nội dung Kế hoạch bài dạy Toán THPT vào đây (nên dán từng tiết 45 phút để kịch bản ra nhanh và sát nhất)..."
         />
       </div>
 
@@ -189,23 +228,36 @@ export function LessonUploader({
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
-        <button
-          type="button"
-          onClick={onOpenDemo}
-          className="px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 flex items-center gap-2 transition"
-        >
-          <PlayCircle className="w-4 h-4" /> Xem kịch bản mẫu
-        </button>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={handleGenerate}
-          className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2 shadow-sm transition"
-        >
-          <Sparkles className="w-4 h-4" />
-          <span>{loading ? "Gemini AI đang biên soạn..." : "Tạo kịch bản bằng Gemini AI"}</span>
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+        {!hasPersonalKey && remaining <= 0 ? (
+          <button
+            type="button"
+            onClick={onNeedApiKey}
+            className="px-4 py-2 rounded-xl text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 flex items-center gap-1.5"
+          >
+            <KeyRound className="w-4 h-4" /> Nhập Gemini API Key cá nhân để tiếp tục
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={onOpenDemo}
+            className="px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 flex items-center gap-2 transition"
+          >
+            <PlayCircle className="w-4 h-4" /> Xem kịch bản mẫu
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={handleGenerate}
+            className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2 shadow-sm transition"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>{loading ? "Gemini AI đang biên soạn..." : "Tạo kịch bản bằng Gemini AI"}</span>
+          </button>
+        </div>
       </div>
     </div>
   );

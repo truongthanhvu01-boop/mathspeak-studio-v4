@@ -1,10 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FilePlus2, Headphones, Sigma, FolderOpen, ExternalLink } from "lucide-react";
+import {
+  FilePlus2,
+  Headphones,
+  Sigma,
+  FolderOpen,
+  ExternalLink,
+  KeyRound,
+  LogOut,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DEMO_LESSON } from "@/lib/demo-data";
-import { AuthBar } from "./components/AuthBar";
+import { AuthGate } from "./components/AuthGate";
+import { ApiKeyModal } from "./components/ApiKeyModal";
 import { LessonUploader } from "./components/LessonUploader";
 import { ShadowingStudio } from "./components/ShadowingStudio";
 import { MathGlossary } from "./components/MathGlossary";
@@ -13,21 +22,32 @@ import type { LessonScript } from "@/types/mathspeak";
 
 type TabId = "input" | "studio" | "glossary" | "library";
 
+interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string;
+  school_name: string;
+  trial_used: number;
+  trial_limit: number;
+  has_personal_key: boolean;
+}
+
 export default function MathSpeakHomePage() {
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [tab, setTab] = useState<TabId>("input");
-  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [lessons, setLessons] = useState<LessonScript[]>([DEMO_LESSON]);
   const [currentScript, setCurrentScript] = useState<LessonScript>(DEMO_LESSON);
+  const [apiModalOpen, setApiModalOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => {
       setToast((prev) => (prev === msg ? null : prev));
-    }, 3600);
+    }, 3800);
   }, []);
 
-  // Register PWA Service Worker
   useEffect(() => {
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -35,28 +55,29 @@ export default function MathSpeakHomePage() {
   }, []);
 
   const syncUserAndLessons = useCallback(async () => {
-    const supabase = createClient();
-    if (!supabase) return;
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    setUserEmail(user?.email || null);
-
-    if (user) {
-      try {
-        const resp = await fetch("/api/lessons");
-        const data = await resp.json();
-        if (Array.isArray(data.lessons) && data.lessons.length > 0) {
-          setLessons(data.lessons);
-          setCurrentScript((prev) => (prev.is_demo ? data.lessons[0] : prev));
-        } else {
-          setLessons([DEMO_LESSON]);
-        }
-      } catch {
-        // Keep current state
+    setCheckingAuth(true);
+    try {
+      const profResp = await fetch("/api/profile");
+      const profData = await profResp.json();
+      if (!profData.authenticated || !profData.profile) {
+        setProfile(null);
+        setLessons([DEMO_LESSON]);
+        return;
       }
-    } else {
-      setLessons([DEMO_LESSON]);
+      setProfile(profData.profile);
+
+      const lesResp = await fetch("/api/lessons");
+      const lesData = await lesResp.json();
+      if (Array.isArray(lesData.lessons) && lesData.lessons.length > 0) {
+        setLessons(lesData.lessons);
+        setCurrentScript((prev) => (prev.is_demo ? lesData.lessons[0] : prev));
+      } else {
+        setLessons([DEMO_LESSON]);
+      }
+    } catch {
+      setProfile(null);
+    } finally {
+      setCheckingAuth(false);
     }
   }, []);
 
@@ -64,10 +85,20 @@ export default function MathSpeakHomePage() {
     syncUserAndLessons();
   }, [syncUserAndLessons]);
 
+  async function handleSignOut() {
+    const supabase = createClient();
+    if (supabase) await supabase.auth.signOut();
+    setProfile(null);
+    setLessons([DEMO_LESSON]);
+    setCurrentScript(DEMO_LESSON);
+    notify("Đã đăng xuất.");
+  }
+
   function handleScriptCreated(script: LessonScript) {
     setCurrentScript(script);
-    setLessons((prev) => [script, ...prev.filter((x) => x.id !== script.id)]);
+    setLessons((prev) => [script, ...prev.filter((x) => x.id !== script.id && !x.is_demo)]);
     setTab("studio");
+    syncUserAndLessons();
   }
 
   async function handleToggleMastered(lineId: string) {
@@ -80,10 +111,9 @@ export default function MathSpeakHomePage() {
     setCurrentScript(updatedScript);
     setLessons((prev) => prev.map((l) => (l.id === updatedScript.id ? updatedScript : l)));
 
-    // Sync to Supabase if authenticated and real UUID
     const isUuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(updatedScript.id);
-    if (userEmail && isUuid) {
+    if (profile && isUuid) {
       await fetch(`/api/lessons/${updatedScript.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -94,7 +124,7 @@ export default function MathSpeakHomePage() {
 
   async function handleDeleteLesson(id: string) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-    if (userEmail && isUuid) {
+    if (profile && isUuid) {
       const resp = await fetch(`/api/lessons/${id}`, { method: "DELETE" });
       if (!resp.ok) {
         notify("Không thể xóa bài trên đám mây.");
@@ -105,14 +135,36 @@ export default function MathSpeakHomePage() {
     const safeList = next.length ? next : [DEMO_LESSON];
     setLessons(safeList);
     if (currentScript.id === id) setCurrentScript(safeList[0]);
-    notify("Đã xóa kịch bản.");
+    notify("Đã xóa kịch bản khỏi kho của thầy/cô.");
   }
 
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white text-sm">
+        Đang tải MathSpeak Studio V4...
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <>
+        <AuthGate onAuthenticated={syncUserAndLessons} onNotify={notify} />
+        {toast && (
+          <div className="fixed bottom-4 right-4 z-50 max-w-sm px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white bg-slate-900 border border-slate-700">
+            {toast}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  const remaining = Math.max(0, profile.trial_limit - profile.trial_used);
   const navItems: Array<{ id: TabId; label: string; Icon: typeof FilePlus2 }> = [
     { id: "input", label: "Nhập KHBD", Icon: FilePlus2 },
     { id: "studio", label: "Luyện đọc", Icon: Headphones },
     { id: "glossary", label: "Ký hiệu", Icon: Sigma },
-    { id: "library", label: "Thư viện", Icon: FolderOpen },
+    { id: "library", label: "Kho riêng", Icon: FolderOpen },
   ];
 
   return (
@@ -151,11 +203,35 @@ export default function MathSpeakHomePage() {
             ))}
           </nav>
 
-          <AuthBar
-            userEmail={userEmail}
-            onAuthChange={syncUserAndLessons}
-            onNotify={notify}
-          />
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setApiModalOpen(true)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border flex items-center gap-1.5 transition ${
+                profile.has_personal_key
+                  ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/30"
+                  : remaining > 0
+                  ? "bg-amber-500/20 border-amber-400/40 text-amber-200 hover:bg-amber-500/30"
+                  : "bg-rose-500/20 border-rose-400/40 text-rose-200 hover:bg-rose-500/30"
+              }`}
+              title="Cài đặt Gemini API Key cá nhân"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">
+                {profile.has_personal_key ? "Key riêng ✓" : `Thử: ${remaining}/${profile.trial_limit}`}
+              </span>
+            </button>
+
+            <button
+              onClick={handleSignOut}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 flex items-center gap-1.5 transition"
+              title={`Đăng xuất (${profile.email})`}
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline max-w-[110px] truncate">
+                {profile.full_name || profile.email}
+              </span>
+            </button>
+          </div>
         </div>
 
         {/* Mobile Nav */}
@@ -178,11 +254,15 @@ export default function MathSpeakHomePage() {
       <main className="flex-1 max-w-6xl w-full mx-auto px-3 sm:px-5 py-5">
         {tab === "input" && (
           <LessonUploader
+            hasPersonalKey={profile.has_personal_key}
+            trialUsed={profile.trial_used}
+            trialLimit={profile.trial_limit}
             onScriptCreated={handleScriptCreated}
             onOpenDemo={() => {
               setCurrentScript(DEMO_LESSON);
               setTab("studio");
             }}
+            onNeedApiKey={() => setApiModalOpen(true)}
             onNotify={notify}
           />
         )}
@@ -201,7 +281,7 @@ export default function MathSpeakHomePage() {
           <LibraryExport
             currentScript={currentScript}
             lessons={lessons}
-            isAuthenticated={!!userEmail}
+            isAuthenticated={true}
             onSelectLesson={(l) => {
               setCurrentScript(l);
               setTab("studio");
@@ -235,6 +315,16 @@ export default function MathSpeakHomePage() {
           </a>
         </div>
       </footer>
+
+      <ApiKeyModal
+        open={apiModalOpen}
+        hasPersonalKey={profile.has_personal_key}
+        trialUsed={profile.trial_used}
+        trialLimit={profile.trial_limit}
+        onClose={() => setApiModalOpen(false)}
+        onSaved={syncUserAndLessons}
+        onNotify={notify}
+      />
 
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 max-w-sm px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white bg-slate-900 border border-slate-700">

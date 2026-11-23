@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";export const maxDuration = 60;
+export const maxDuration = 60;
+
+import { NextResponse } from "next/server";
 import { callGeminiJson } from "@/lib/gemini";
 import { createServerSupabase } from "@/lib/supabase/server";
 import type { LessonScript, ScriptStage, VocabItem } from "@/types/mathspeak";
@@ -14,6 +16,58 @@ interface GeneratedPayload {
 
 export async function POST(request: Request) {
   try {
+    const supabase = await createServerSupabase();
+    if (!supabase) {
+      return NextResponse.json({ error: "Chưa cấu hình Supabase." }, { status: 503 });
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: "Vui lòng đăng nhập tài khoản trước khi sử dụng." },
+        { status: 401 }
+      );
+    }
+
+    // Load or create profile to enforce Hybrid trial limit
+    let { data: profile } = await supabase
+      .from("user_profiles")
+      .select("id, trial_used, trial_limit, personal_api_key")
+      .eq("id", user.id)
+      .single();
+
+    if (!profile) {
+      const meta = (user.user_metadata || {}) as { full_name?: string; school_name?: string };
+      const { data: created } = await supabase
+        .from("user_profiles")
+        .insert({
+          id: user.id,
+          email: user.email || "",
+          full_name: meta.full_name || "",
+          school_name: meta.school_name || "",
+        })
+        .select("id, trial_used, trial_limit, personal_api_key")
+        .single();
+      profile = created;
+    }
+
+    const personalKey = (profile?.personal_api_key || "").trim();
+    const trialUsed = profile?.trial_used ?? 0;
+    const trialLimit = profile?.trial_limit ?? 2;
+    const usingPersonalKey = personalKey.length > 10;
+
+    if (!usingPersonalKey && trialUsed >= trialLimit) {
+      return NextResponse.json(
+        {
+          code: "TRIAL_EXHAUSTED",
+          error: `Thầy/Cô đã dùng hết ${trialLimit} lượt dùng thử miễn phí. Vui lòng nhập Gemini API Key cá nhân miễn phí để tiếp tục sử dụng không giới hạn.`,
+        },
+        { status: 402 }
+      );
+    }
+
     const body = (await request.json()) as {
       lessonText?: string;
       grade?: string;
@@ -89,18 +143,21 @@ Return ONLY valid JSON matching this exact schema:
 
 Rules:
 - Keep role strictly one of: "Teacher", "Board", "Expected Student".
-- Include 4 pedagogical stages (Warm-up, New Knowledge, Practice, Application & Wrap-up) with 12 to 18 total concise, speakable lines.
-- Include 6 to 10 key math symbols/terms in "vocab".
-- CRITICAL JSON ESCAPING: Always double-escape EVERY backslash in LaTeX inside JSON strings (for example write "\\in", "\\ge", "\\le", "\\frac{1}{2}", "\\sqrt{3}", "\\mathbb{R}", "\\infty"). Never output a single unescaped backslash.
+- Include 4 pedagogical stages (Warm-up, New Knowledge, Practice, Application & Wrap-up) with 12 to 16 concise, speakable lines.
+- Include 6 to 8 key math symbols/terms in "vocab".
+- CRITICAL JSON ESCAPING: Always double-escape EVERY backslash in LaTeX inside JSON strings (e.g. "\\in", "\\ge", "\\le", "\\frac{1}{2}", "\\sqrt{3}", "\\mathbb{R}", "\\infty").
 
 Vietnamese Lesson Plan:
 ---
-${lessonText.slice(0, 14000)}
+${lessonText.slice(0, 10000)}
 ---`;
 
     const { data: parsed, usedModel } = await callGeminiJson<GeneratedPayload>(
       [{ text: prompt }],
-      { temperature: 0.3 }
+      {
+        temperature: 0.3,
+        apiKeyOverride: usingPersonalKey ? personalKey : undefined,
+      }
     );
 
     const stages: ScriptStage[] = Array.isArray(parsed.stages) ? parsed.stages : [];
@@ -119,43 +176,51 @@ ${lessonText.slice(0, 14000)}
       duration: parsed.duration || "45 phút",
       title_en: parsed.title_en || "English Math Teaching Script",
       title_vi: parsed.title_vi || "Kịch bản giảng dạy Toán THPT",
-      source: `Gemini (${usedModel})`,
+      source: usingPersonalKey ? `${usedModel} (Key riêng)` : `${usedModel} (Dùng thử)`,
       stages,
       vocab: Array.isArray(parsed.vocab) ? parsed.vocab : [],
       mastered_line_ids: [],
       created_at: new Date().toISOString(),
     };
 
-    const supabase = await createServerSupabase();
-    if (supabase) {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        const { data: inserted } = await supabase
-          .from("lessons")
-          .insert({
-            user_id: user.id,
-            grade: script.grade,
-            duration: script.duration,
-            title_en: script.title_en,
-            title_vi: script.title_vi,
-            source: script.source,
-            stages: script.stages,
-            vocab: script.vocab,
-            mastered_line_ids: [],
-          })
-          .select("id, created_at")
-          .single();
+    const { data: inserted } = await supabase
+      .from("lessons")
+      .insert({
+        user_id: user.id,
+        grade: script.grade,
+        duration: script.duration,
+        title_en: script.title_en,
+        title_vi: script.title_vi,
+        source: script.source,
+        stages: script.stages,
+        vocab: script.vocab,
+        mastered_line_ids: [],
+      })
+      .select("id, created_at")
+      .single();
 
-        if (inserted) {
-          script.id = inserted.id;
-          script.created_at = inserted.created_at;
-        }
-      }
+    if (inserted) {
+      script.id = inserted.id;
+      script.created_at = inserted.created_at;
     }
 
-    return NextResponse.json({ script, usedModel });
+    // Update usage counter & last_active_at
+    const nextTrialUsed = usingPersonalKey ? trialUsed : trialUsed + 1;
+    await supabase
+      .from("user_profiles")
+      .update({
+        trial_used: nextTrialUsed,
+        last_active_at: new Date().toISOString(),
+      })
+      .eq("id", user.id);
+
+    return NextResponse.json({
+      script,
+      usedModel,
+      trial_used: nextTrialUsed,
+      trial_limit: trialLimit,
+      using_personal_key: usingPersonalKey,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Lỗi sinh kịch bản.";
     return NextResponse.json({ error: message }, { status: 500 });
