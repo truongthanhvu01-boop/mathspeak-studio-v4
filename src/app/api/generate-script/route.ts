@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";export const maxDuration = 60;
 import { callGeminiJson } from "@/lib/gemini";
 import { createServerSupabase } from "@/lib/supabase/server";
 import type { LessonScript, ScriptStage, VocabItem } from "@/types/mathspeak";
