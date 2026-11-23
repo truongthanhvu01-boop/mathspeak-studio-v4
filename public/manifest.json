@@ -1,0 +1,18 @@
+{
+  "name": "MathSpeak Studio — Giảng Toán THPT Tiếng Anh",
+  "short_name": "MathSpeak",
+  "description": "Chuyển Kế hoạch bài dạy Toán THPT sang kịch bản giảng dạy tiếng Anh kèm luyện đọc và AI chấm phát âm.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
