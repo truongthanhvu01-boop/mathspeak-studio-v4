@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
 
+function maskKey(k: string | null | undefined): string {
+  const s = (k || "").trim();
+  if (s.length < 10) return "";
+  return `${s.slice(0, 6)}••••${s.slice(-4)}`;
+}
+
 export async function GET() {
   const supabase = await createServerSupabase();
   if (!supabase) {
@@ -46,6 +52,7 @@ export async function GET() {
           trial_used: profile.trial_used ?? 0,
           trial_limit: profile.trial_limit ?? 2,
           has_personal_key: !!(profile.personal_api_key && profile.personal_api_key.trim()),
+          key_hint: maskKey(profile.personal_api_key),
         }
       : null,
   });
@@ -103,6 +110,7 @@ export async function PATCH(request: Request) {
       trial_used: data.trial_used ?? 0,
       trial_limit: data.trial_limit ?? 2,
       has_personal_key: !!(data.personal_api_key && data.personal_api_key.trim()),
+      key_hint: maskKey(data.personal_api_key),
     },
   });
 }

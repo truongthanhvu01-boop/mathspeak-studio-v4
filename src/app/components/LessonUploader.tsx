@@ -9,6 +9,7 @@ interface LessonUploaderProps {
   hasPersonalKey: boolean;
   trialUsed: number;
   trialLimit: number;
+  selectedModel: string;
   onScriptCreated: (script: LessonScript) => void;
   onOpenDemo: () => void;
   onNeedApiKey: () => void;
@@ -19,6 +20,7 @@ export function LessonUploader({
   hasPersonalKey,
   trialUsed,
   trialLimit,
+  selectedModel,
   onScriptCreated,
   onOpenDemo,
   onNeedApiKey,
@@ -69,7 +71,7 @@ export function LessonUploader({
       const resp = await fetch("/api/generate-script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lessonText, grade, level, style }),
+        body: JSON.stringify({ lessonText, grade, level, style, model: selectedModel }),
       });
       const data = await resp.json();
       if (resp.status === 402 || data.code === "TRIAL_EXHAUSTED") {
@@ -97,7 +99,14 @@ export function LessonUploader({
           <p className="text-sm text-slate-600">
             {hasPersonalKey ? (
               <span className="text-emerald-700 font-medium">
-                Đang dùng Gemini API Key cá nhân (Không giới hạn lượt).
+                Đang dùng Gemini API Key cá nhân (Không giới hạn).{" "}
+                <button
+                  type="button"
+                  onClick={onNeedApiKey}
+                  className="text-indigo-600 hover:underline font-semibold"
+                >
+                  Đổi API Key / Model
+                </button>
               </span>
             ) : (
               <span>

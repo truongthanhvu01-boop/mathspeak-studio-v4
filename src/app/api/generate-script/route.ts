@@ -73,6 +73,7 @@ export async function POST(request: Request) {
       grade?: string;
       level?: string;
       style?: string;
+      model?: string;
     };
 
     const lessonText = (body.lessonText || "").trim();
@@ -157,6 +158,7 @@ ${lessonText.slice(0, 10000)}
       {
         temperature: 0.3,
         apiKeyOverride: usingPersonalKey ? personalKey : undefined,
+        modelOverride: body.model || undefined,
       }
     );
 

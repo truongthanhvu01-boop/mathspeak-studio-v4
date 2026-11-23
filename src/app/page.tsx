@@ -30,6 +30,7 @@ interface UserProfile {
   trial_used: number;
   trial_limit: number;
   has_personal_key: boolean;
+  key_hint?: string;
 }
 
 export default function MathSpeakHomePage() {
@@ -39,6 +40,7 @@ export default function MathSpeakHomePage() {
   const [lessons, setLessons] = useState<LessonScript[]>([DEMO_LESSON]);
   const [currentScript, setCurrentScript] = useState<LessonScript>(DEMO_LESSON);
   const [apiModalOpen, setApiModalOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState("gemini-3.8-flash");
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = useCallback((msg: string) => {
@@ -216,8 +218,8 @@ export default function MathSpeakHomePage() {
               title="Cài đặt Gemini API Key cá nhân"
             >
               <KeyRound className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">
-                {profile.has_personal_key ? "Key riêng ✓" : `Thử: ${remaining}/${profile.trial_limit}`}
+              <span>
+                {profile.has_personal_key ? "Đổi Key ✓" : `Key (${remaining}/${profile.trial_limit})`}
               </span>
             </button>
 
@@ -257,6 +259,7 @@ export default function MathSpeakHomePage() {
             hasPersonalKey={profile.has_personal_key}
             trialUsed={profile.trial_used}
             trialLimit={profile.trial_limit}
+            selectedModel={selectedModel}
             onScriptCreated={handleScriptCreated}
             onOpenDemo={() => {
               setCurrentScript(DEMO_LESSON);
@@ -319,8 +322,11 @@ export default function MathSpeakHomePage() {
       <ApiKeyModal
         open={apiModalOpen}
         hasPersonalKey={profile.has_personal_key}
+        keyHint={profile.key_hint || ""}
         trialUsed={profile.trial_used}
         trialLimit={profile.trial_limit}
+        selectedModel={selectedModel}
+        onModelChange={(m) => setSelectedModel(m)}
         onClose={() => setApiModalOpen(false)}
         onSaved={syncUserAndLessons}
         onNotify={notify}
