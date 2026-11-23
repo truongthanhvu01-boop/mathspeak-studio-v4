@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.katex {
+  font-size: 1.06em;
+}
+
+.line-card-speaking {
+  border-color: #4f46e5 !important;
+  background-color: #eef2ff !important;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.14);
+}

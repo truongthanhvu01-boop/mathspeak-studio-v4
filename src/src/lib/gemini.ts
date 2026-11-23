@@ -1,0 +1,135 @@
+export interface GeminiPart {
+  text?: string;
+  inlineData?: {
+    mimeType: string;
+    data: string;
+  };
+}
+
+export function safeParseGeminiJson<T = Record<string, unknown>>(raw: string): T {
+  let txt = String(raw || "").trim();
+  txt = txt.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const firstBrace = txt.indexOf("{");
+  const lastBrace = txt.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    txt = txt.slice(firstBrace, lastBrace + 1);
+  }
+
+  try {
+    return JSON.parse(txt) as T;
+  } catch {
+    let out = "";
+    let inStr = false;
+    for (let i = 0; i < txt.length; i++) {
+      const ch = txt[i];
+      if (!inStr) {
+        if (ch === '"') inStr = true;
+        out += ch;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = false;
+        out += ch;
+        continue;
+      }
+      if (ch === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
+      if (ch === "\\") {
+        const next = txt[i + 1] || "";
+        const next2 = txt[i + 2] || "";
+        const isHexUnicode =
+          next === "u" && /^[0-9a-fA-F]{4}$/.test(txt.slice(i + 2, i + 6));
+        const isSimpleJsonEscape = next === '"' || next === "\\" || next === "/";
+        const isControlEscape = /[bfnrt]/.test(next) && !/[a-zA-Z]/.test(next2);
+        if (isSimpleJsonEscape || isHexUnicode || isControlEscape) {
+          out += ch + next;
+          i++;
+        } else {
+          out += "\\\\";
+        }
+        continue;
+      }
+      out += ch;
+    }
+    return JSON.parse(out) as T;
+  }
+}
+
+export async function callGeminiJson<T = Record<string, unknown>>(
+  parts: GeminiPart[],
+  options?: { temperature?: number; apiKeyOverride?: string; modelOverride?: string }
+): Promise<{ data: T; usedModel: string }> {
+  const apiKey = (options?.apiKeyOverride || "").trim() || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "Chưa có Gemini API Key. Vui lòng nhập API Key cá nhân hoặc cấu hình GEMINI_API_KEY trên máy chủ."
+    );
+  }
+
+  const primary = options?.modelOverride || "gemini-3.8-flash";
+  const models = Array.from(new Set([primary, "gemini-3.8-flash"]));
+
+  let lastErr: Error | null = null;
+
+  for (let i = 0; i < models.length; i++) {
+    const modelName = models[i];
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      modelName
+    )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: options?.temperature ?? 0.3,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      }),
+    });
+
+    if (!resp.ok) {
+      const errJson = (await resp.json().catch(() => ({}))) as {
+        error?: { message?: string };
+      };
+      const errMsg = errJson.error?.message || `HTTP ${resp.status}`;
+      const isTransient =
+        resp.status === 503 ||
+        resp.status === 429 ||
+        /high demand|overloaded|quota|unavailable/i.test(errMsg);
+      lastErr = new Error(errMsg);
+      if (isTransient && i < models.length - 1) {
+        continue;
+      }
+      throw lastErr;
+    }
+
+    const payload = (await resp.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const rawText = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      lastErr = new Error("Gemini không trả về nội dung JSON.");
+      continue;
+    }
+
+    return {
+      data: safeParseGeminiJson<T>(rawText),
+      usedModel: modelName,
+    };
+  }
+
+  throw lastErr || new Error("Không thể kết nối Gemini API.");
+}
