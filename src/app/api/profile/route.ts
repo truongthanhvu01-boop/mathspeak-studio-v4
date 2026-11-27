@@ -20,14 +20,14 @@ export async function GET() {
     return NextResponse.json({ authenticated: false, profile: null });
   }
 
+  const meta = (user.user_metadata || {}) as { full_name?: string; school_name?: string };
   let { data: profile } = await supabase
     .from("user_profiles")
-    .select("id, email, full_name, school_name, trial_used, trial_limit, personal_api_key, last_active_at")
+    .select("id, email, full_name, school_name, trial_used, trial_limit, personal_api_key")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
 
   if (!profile) {
-    const meta = (user.user_metadata || {}) as { full_name?: string; school_name?: string };
     const { data: created } = await supabase
       .from("user_profiles")
       .insert({
@@ -36,25 +36,23 @@ export async function GET() {
         full_name: meta.full_name || "",
         school_name: meta.school_name || "",
       })
-      .select("id, email, full_name, school_name, trial_used, trial_limit, personal_api_key, last_active_at")
-      .single();
+      .select("id, email, full_name, school_name, trial_used, trial_limit, personal_api_key")
+      .maybeSingle();
     profile = created;
   }
 
   return NextResponse.json({
     authenticated: true,
-    profile: profile
-      ? {
-          id: profile.id,
-          email: profile.email,
-          full_name: profile.full_name,
-          school_name: profile.school_name,
-          trial_used: profile.trial_used ?? 0,
-          trial_limit: profile.trial_limit ?? 2,
-          has_personal_key: !!(profile.personal_api_key && profile.personal_api_key.trim()),
-          key_hint: maskKey(profile.personal_api_key),
-        }
-      : null,
+    profile: {
+      id: user.id,
+      email: profile?.email || user.email || "",
+      full_name: profile?.full_name || meta.full_name || "",
+      school_name: profile?.school_name || meta.school_name || "",
+      trial_used: profile?.trial_used ?? 0,
+      trial_limit: profile?.trial_limit ?? 2,
+      has_personal_key: !!(profile?.personal_api_key && profile.personal_api_key.trim()),
+      key_hint: maskKey(profile?.personal_api_key),
+    },
   });
 }
 
@@ -92,8 +90,7 @@ export async function PATCH(request: Request) {
 
   const { data, error } = await supabase
     .from("user_profiles")
-    .update(updateFields)
-    .eq("id", user.id)
+    .upsert({ id: user.id, email: user.email || "", ...updateFields })
     .select("id, email, full_name, school_name, trial_used, trial_limit, personal_api_key")
     .single();
 
